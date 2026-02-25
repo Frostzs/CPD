@@ -22,7 +22,7 @@ void readFile (char const* filename, std::vector<docs>& info)
     
     if (!file.is_open()) {
         std::cerr << "Error: Could not open file " << filename << "\n";
-        return;
+        exit(1);
     }
 
     // gets the first line and puts it into the respective variables
