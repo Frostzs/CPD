@@ -12,7 +12,34 @@ struct docs
 {
     int id;
     std::vector<double> score;
+    std::vector<double> distances;
 };
+
+struct container 
+{ 
+    int id;
+    std::vector<double> mean;
+    std::vector<docs> docs_vector;
+};
+
+void updateMean (container &c){
+    double total_value = 0.0;
+    for (size_t i = 0; i < numSubjects; i++){
+        total_value = 0.0;
+        for (size_t j = 0; j < c.docs_vector.size(); j++){
+            total_value += c.docs_vector[j].score[i];
+        }
+        c.mean[i] = total_value / c.docs_vector.size();
+    }
+}
+
+void computeDistance (container &c, docs &d){
+    double sum = 0.0;
+    for (size_t i = 0; i < numSubjects; i++){
+        delta += (d.score[i] - c.mean[i]) * (d.score[i] - c.mean[i]);
+    }
+    d.distances[c.id] = delta;
+}
 
 // read a file
 void readFile (char const* filename, std::vector<docs>& info)
