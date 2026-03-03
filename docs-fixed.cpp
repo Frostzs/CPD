@@ -104,10 +104,12 @@ int main(int argc, char const *argv[])
         cabs[c].docs_vector.reserve(documents / cabinets + 1);
     }
 
+    // Track which cabinet each document belongs to
+    std::vector<int> assignment(documents);
+    
     // Round-robin initial assignment
     for (int i = 0; i < documents; i++) {
-        int target = i % cabinets;
-        cabs[target].docs_vector.push_back(info[i]);
+        assignment[i] = i % cabinets;
     }
 
     double exec_time = -omp_get_wtime();
@@ -118,62 +120,51 @@ int main(int argc, char const *argv[])
     {
         changed = false;
 
-        // Step 2: Update means
-        for (int c = 0; c < cabinets; c++)
-            updateMean(cabs[c]);
-
-        // Step 3: Reassign documents
-        std::vector<container> new_cabs(cabinets);
-
+        // Step 2: Update means for each cabinet
         for (int c = 0; c < cabinets; c++) {
-            new_cabs[c].id = c;
-            new_cabs[c].mean.resize(numSubjects);
-            new_cabs[c].docs_vector.reserve(cabs[c].docs_vector.size());
+            // Clear and rebuild doc list for this cabinet
+            cabs[c].docs_vector.clear();
+            for (int i = 0; i < documents; i++) {
+                if (assignment[i] == c) {
+                    cabs[c].docs_vector.push_back(info[i]);
+                }
+            }
+            updateMean(cabs[c]);
         }
 
-        for (int c = 0; c < cabinets; c++)
+        // Step 3: Reassign documents to closest cabinet
+        for (int i = 0; i < documents; i++)
         {
-            for (size_t j = 0; j < cabs[c].docs_vector.size(); j++)
-            {
-                docs &d = cabs[c].docs_vector[j];
+            docs &d = info[i];
 
-                // Compute distances to all cabinets
-                for (int k = 0; k < cabinets; k++)
-                    computeDistance(cabs[k], d);
+            // Compute distances to all cabinets
+            for (int k = 0; k < cabinets; k++)
+                computeDistance(cabs[k], d);
 
-                // Find closest cabinet
-                int best = 0;
-                double best_dist = d.distances[0];
+            // Find closest cabinet
+            int best = 0;
+            double best_dist = d.distances[0];
 
-                for (int k = 1; k < cabinets; k++) {
-                    if (d.distances[k] < best_dist) {
-                        best_dist = d.distances[k];
-                        best = k;
-                    }
+            for (int k = 1; k < cabinets; k++) {
+                if (d.distances[k] < best_dist) {
+                    best_dist = d.distances[k];
+                    best = k;
                 }
+            }
 
-                if (best != c)
-                    changed = true;
-
-                new_cabs[best].docs_vector.push_back(d);
+            if (best != assignment[i]) {
+                assignment[i] = best;
+                changed = true;
             }
         }
-
-        cabs.swap(new_cabs);  // Faster than assignment
     }
 
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1fs\n", exec_time);
 
     // Output ordered by document id
-    std::vector<int> result(documents);
-
-    for (int c = 0; c < cabinets; c++)
-        for (size_t j = 0; j < cabs[c].docs_vector.size(); j++)
-            result[cabs[c].docs_vector[j].id] = c;
-
     for (int i = 0; i < documents; i++)
-        std::cout << result[i] << "\n";
+        std::cout << assignment[info[i].id] << "\n";
 
     return 0;
 }
