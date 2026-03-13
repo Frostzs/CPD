@@ -95,18 +95,18 @@ int main(int argc, char const *argv[])
     std::vector<docs> info;
     readFile(argv[1], info);
 
+    // track which cabinet each document belongs to
+    std::vector<int> assignment(documents);
+
     // initialize cabinets
     std::vector<container> cabs(cabinets);
-
+    
     for (int c = 0; c < cabinets; c++) {
         cabs[c].id = c;
         cabs[c].mean.resize(numSubjects);
         cabs[c].docs_vector.reserve(documents / cabinets + 1);
     }
 
-    // track which cabinet each document belongs to
-    std::vector<int> assignment(documents);
-    
     // round-robin initial assignment
     for (int i = 0; i < documents; i++) {
         assignment[i] = i % cabinets;
@@ -119,43 +119,50 @@ int main(int argc, char const *argv[])
         changed = false;
 
         // update means for each cabinet and rebuilt its vector
-        for (int c = 0; c < cabinets; c++) {
-            cabs[c].docs_vector.clear();
-            for (int i = 0; i < documents; i++) {
-                if (assignment[i] == c) {
-                    cabs[c].docs_vector.push_back(info[i]);
-                }
-            }
-            updateMean(cabs[c]);
-        }
-
-        // assign documents to closest cabinet
-        for (int i = 0; i < documents; i++)
+        #pragma omp parallel 
         {
-            docs &d = info[i];
-
-            // compute the distances to all cabinets
-            //probably pragmaa omp for here
-            for (int c = 0; c < cabinets; c++)
-                computeDistance(cabs[c], d);
-
-
-            int best = 0;
-            double best_dist = d.distances[0];
-
-            // searches for the lowest distance of a document to a cabinet
-            //pragmaa omp for here also
-            for (int c = 1; c < cabinets; c++) {
-                if (d.distances[c] < best_dist) {
-                    best_dist = d.distances[c];
-                    best = c;
+            // schedule(static): divides workload uniformly between threads (avoids runtime scheduling)
+            #pragma omp for schedule(static)
+            for (int c = 0; c < cabinets; c++) {
+                cabs[c].docs_vector.clear();
+                for (int i = 0; i < documents; i++) {
+                    if (assignment[i] == c) {
+                        cabs[c].docs_vector.push_back(info[i]);
+                    }
                 }
+                updateMean(cabs[c]);
             }
+            
 
-            // if found a new distance, change it in assignment
-            if (best != assignment[i]) {
-                assignment[i] = best;
-                changed = true;
+            #pragma omp for schedule(static)
+            // assign documents to closest cabinet
+            for (int i = 0; i < documents; i++)
+            {
+                docs &d = info[i];
+
+                // compute the distances to all cabinets
+                //probably pragmaa omp for here
+                for (int c = 0; c < cabinets; c++)
+                    computeDistance(cabs[c], d);
+
+
+                int best = 0;
+                double best_dist = d.distances[0];
+
+                // searches for the lowest distance of a document to a cabinet
+                //pragmaa omp for here also
+                for (int c = 1; c < cabinets; c++) {
+                    if (d.distances[c] < best_dist) {
+                        best_dist = d.distances[c];
+                        best = c;
+                    }
+                }
+
+                // if found a new distance, change it in assignment
+                if (best != assignment[i]) {
+                    assignment[i] = best;
+                    changed = true;
+                }
             }
         }
     }
