@@ -87,6 +87,8 @@ void readFile(const char* filename, std::vector<docs>& info)
 
 int main(int argc, char const *argv[])
 {
+    double exec_time;
+    
     if (argc < 2) {
         std::cerr << "Usage: ./docs <file>\n";
         return 1;
@@ -94,6 +96,8 @@ int main(int argc, char const *argv[])
 
     std::vector<docs> info;
     readFile(argv[1], info);
+
+    exec_time = -omp_get_wtime();
 
     // track which cabinet each document belongs to
     std::vector<int> assignment(documents);
@@ -167,6 +171,8 @@ int main(int argc, char const *argv[])
         }
     }
 
+    exec_time += omp_get_wtime();
+    fprintf(stderr, "%.1fs\n", exec_time);
 
     // output ordered by document id
     for (int i = 0; i < documents; i++)
