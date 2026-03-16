@@ -46,6 +46,7 @@ void computeDistance(container &c, docs &d)
 {
     double sum = 0.0;
 
+    // Only suitable spot for SIMD
     #pragma omp simd
     for (int s = 0; s < numSubjects; s++) {
         double diff = d.score[s] - c.mean[s];
