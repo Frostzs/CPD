@@ -125,11 +125,12 @@ int main(int argc, char const *argv[])
     {
         changed = false;
 
-        // update means for each cabinet and rebuilt its vector
+        // start parallel region
         #pragma omp parallel
         {
             // schedule(static): divides workload uniformly between threads (avoids runtime scheduling)
             #pragma omp for schedule(static)
+            // update means for each cabinet and rebuilt its vector
             for (int c = 0; c < cabinets; c++) {
                 cabs[c].docs_vector.clear();
                 for (int i = 0; i < documents; i++) {
