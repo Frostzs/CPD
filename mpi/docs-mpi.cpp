@@ -1,4 +1,5 @@
 #include <mpi.h>
+#include <omp.h>
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -6,7 +7,7 @@
 
 int cabinets, documents, numSubjects;
 
-// Helper: Calculate distance between a document in the local buffer and a centroid
+// calculates the distances between a document in the local buffer and a centroid
 double computeDistance(int local_doc_idx, int cab_idx, const std::vector<double>& local_scores, const std::vector<double>& centroids) {
     double dist = 0.0;
     for (int s = 0; s < numSubjects; s++) {
@@ -19,6 +20,7 @@ double computeDistance(int local_doc_idx, int cab_idx, const std::vector<double>
 int main(int argc, char* argv[]) {
     MPI_Init(&argc, &argv);
 
+    double exec_time;
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -37,32 +39,65 @@ int main(int argc, char* argv[]) {
         }
         file.close();
     }
-
-    // Share metadata
+    if (rank == 0)
+    {
+        exec_time = -omp_get_wtime();
+    }
+    
+    // share metadata
     MPI_Bcast(&cabinets, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&documents, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&numSubjects, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    // Split the work
-    int local_n = documents / size; 
-    std::vector<double> local_scores(local_n * numSubjects);
-    
-    // Scatter data: Each process gets its own slice of documents
-    MPI_Scatter(all_scores_flat.data(), local_n * numSubjects, MPI_DOUBLE, 
-                local_scores.data(), local_n * numSubjects, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
+    // split the work
+    std::vector<int> n_docs(size), range_docs(size);
     std::vector<double> centroids(cabinets * numSubjects);
+    int base = documents / size;
+    int mod  = documents % size;
+
+    for (int i = 0; i < size; i++) {
+        n_docs[i] = base + (i < mod ? 1 : 0);   // add the ramainder from the beggining
+        range_docs[i] = (i == 0) ? 0 : range_docs[i - 1] + n_docs[i - 1];   // the range each thread is gonna work on (ex: [0..n], [n+1.. n+n], etc)
+    }
+
+    int local_n = n_docs[rank];
+
+    // we have to multiply the values with numSubjects because of initial reading from file
+    std::vector<int> doc_scores(size), range_scores(size);
+    for (int i = 0; i < size; i++) {
+        doc_scores[i] = n_docs[i] * numSubjects;
+        range_scores[i] = range_docs[i] * numSubjects;
+    }
+
+    std::vector<double> local_scores(local_n * numSubjects);
+
+    // scatter the data
+    MPI_Scatterv(
+        rank == 0 ? all_scores_flat.data() : nullptr,   // sendbuf
+        doc_scores.data(),                           // sendcounts
+        range_scores.data(),                           // displs
+        MPI_DOUBLE,                                     //sendtype
+        local_scores.data(),                            // recvbuf
+        doc_scores[rank],                            // recvcount
+        MPI_DOUBLE,                                     // recvtype
+        0,                                              // root
+        MPI_COMM_WORLD                                  // comm
+    );
+
+    // initial round-robin assignment
     std::vector<int> local_assignment(local_n);
-    
-    // Initial round-robin assignment
-    for (int i = 0; i < local_n; i++) local_assignment[i] = (rank * local_n + i) % cabinets;
+    for (int i = 0; i < local_n; i++) {
+        int global_i = range_docs[rank] + i;
+        local_assignment[i] = global_i % cabinets;
+    }
+
 
     bool changed = true;
     while (changed) {
         std::vector<double> local_sums(cabinets * numSubjects, 0.0);
         std::vector<int> local_counts(cabinets, 0);
 
-        // 1. Local Math: Sum up scores for assigned cabinets
+        // sum up scores for assigned cabinets
         for (int i = 0; i < local_n; i++) {
             int c = local_assignment[i];
             local_counts[c]++;
@@ -70,13 +105,13 @@ int main(int argc, char* argv[]) {
                 local_sums[c * numSubjects + s] += local_scores[i * numSubjects + s];
         }
 
-        // 2. Global Sync: Combine everyone's sums and counts
+        // sync sums
         std::vector<double> global_sums(cabinets * numSubjects);
         std::vector<int> global_counts(cabinets);
         MPI_Allreduce(local_sums.data(), global_sums.data(), cabinets * numSubjects, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(local_counts.data(), global_counts.data(), cabinets, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 
-        // 3. Update Centroids (Means)
+        // update Centroids (means)
         for (int c = 0; c < cabinets; c++) {
             if (global_counts[c] > 0) {
                 for (int s = 0; s < numSubjects; s++)
@@ -84,7 +119,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 4. Re-assign: Find the new closest cabinet
+        // find the new closest cabinet
         bool local_changed = false;
         for (int i = 0; i < local_n; i++) {
             int best_c = 0;
@@ -102,17 +137,28 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 5. Global Check: Stop if NO ONE changed an assignment
+        // stop if NO ONE changed an assignment
         MPI_Allreduce(&local_changed, &changed, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
     }
 
-    // Gather final results back to Rank 0
     std::vector<int> final_assignments;
     if (rank == 0) final_assignments.resize(documents);
-    MPI_Gather(local_assignment.data(), local_n, MPI_INT, 
-               final_assignments.data(), local_n, MPI_INT, 0, MPI_COMM_WORLD);
+
+    MPI_Gatherv(
+        local_assignment.data(),
+        local_n,
+        MPI_INT,
+        rank == 0 ? final_assignments.data() : nullptr,
+        n_docs.data(),
+        range_docs.data(),
+        MPI_INT,
+        0,
+        MPI_COMM_WORLD
+    );
 
     if (rank == 0) {
+        exec_time += omp_get_wtime();
+        fprintf(stderr, "%.1fs\n", exec_time);
         for (int i = 0; i < documents; i++) std::cout << final_assignments[i] << "\n";
     }
 
