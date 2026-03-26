@@ -5,6 +5,13 @@
 #include <fstream>
 #include <cmath>
 
+// ----------------------------------------------------------------------
+//
+//  Collaborators: Eduardo Barata, Fábio Prata, Carlos Alexandre
+//
+// ----------------------------------------------------------------------
+
+
 int cabinets, documents, numSubjects;
 
 // calculates the distances between a document in the local buffer and a centroid
@@ -43,7 +50,7 @@ int main(int argc, char* argv[]) {
     {
         exec_time = -omp_get_wtime();
     }
-    
+
     // share metadata
     MPI_Bcast(&cabinets, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&documents, 1, MPI_INT, 0, MPI_COMM_WORLD);
