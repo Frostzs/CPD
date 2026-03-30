@@ -4,159 +4,100 @@
 #include <cmath>
 #include <omp.h>
 
-int cabinets, documents, numSubjects = 0;
+// ----------------------------------------------------------------------
+//
+//  Collaborators: Eduardo Barata, Fábio Prata, Carlos Alexandre
+//
+// ----------------------------------------------------------------------
 
-// information of a document
-struct docs
-{
-    int id;
-    std::vector<double> score;
-    std::vector<double> distances;
-};
-
-// container so we dont confuse with other variables but its supposed to be cabinet
-struct container
-{
-    int id;
-    std::vector<double> mean;
-    std::vector<docs> docs_vector;
-};
-
-// updates the mean inside of a cabinet
-void updateMean(container &c)
-{
-    if (c.docs_vector.empty()) {
-        std::fill(c.mean.begin(), c.mean.end(), 0.0);
-        return;
-    }
-
-    for (int s = 0; s < numSubjects; s++) {
-        double total = 0.0;
-
-        for (size_t j = 0; j < c.docs_vector.size(); j++)
-            total += c.docs_vector[j].score[s];
-
-        c.mean[s] = total / c.docs_vector.size();
-    }
-}
-
-// compute the distance of a document to a cabinet
-void computeDistance(container &c, docs &d)
-{
-    double sum = 0.0;
-
-    for (int s = 0; s < numSubjects; s++) {
-        double diff = d.score[s] - c.mean[s];
-        sum += diff * diff;
-    }
-
-    d.distances[c.id] = sum;
-}
-
-// read a file
-void readFile(const char* filename, std::vector<docs>& info)
-{
-    std::ifstream file(filename);
-
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file\n";
-        exit(1);
-    }
-
-    file >> cabinets >> documents >> numSubjects;
-
-    info.reserve(documents);
-
-    for (int i = 0; i < documents; i++)
-    {
-        docs d;
-        file >> d.id;
-
-        d.score.resize(numSubjects);
-        d.distances.resize(cabinets);
-
-        for (int s = 0; s < numSubjects; s++)
-            file >> d.score[s];
-
-        info.push_back(d);
-    }
-
-    file.close();
-}
-
-
-int main(int argc, char const *argv[])
-{
-    double exec_time;
-
+int main(int argc, char const *argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: ./docs <file>\n";
         return 1;
     }
 
-    std::vector<docs> info;
-    readFile(argv[1], info);
-
-    exec_time = -omp_get_wtime();
-
-    // initialize cabinets
-    std::vector<container> cabs(cabinets);
-
-    for (int c = 0; c < cabinets; c++) {
-        cabs[c].id = c;
-        cabs[c].mean.resize(numSubjects);
-        cabs[c].docs_vector.reserve(documents / cabinets + 1);
+    // Global variables replaced by locals
+    int cabinets, documents, numSubjects;
+    
+    // --- FILE READING (Flattened) ---
+    std::ifstream file(argv[1]);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open file\n";
+        return 1;
     }
 
-    // track which cabinet each document belongs to
-    std::vector<int> assignment(documents);
-    
-    // round-robin initial assignment
+    file >> cabinets >> documents >> numSubjects;
+
+    // We use a 2D vector for scores: scores[doc_id][subject]
+    std::vector<std::vector<double>> scores(documents, std::vector<double>(numSubjects));
     for (int i = 0; i < documents; i++) {
-        assignment[i] = i % cabinets;
+        int id; 
+        file >> id; // Assuming IDs are 0 to documents-1
+        for (int s = 0; s < numSubjects; s++) {
+            file >> scores[id][s];
+        }
+    }
+    file.close();
+
+    double exec_time = -omp_get_wtime();
+
+    // --- INITIALIZATION ---
+    // Instead of container struct, we use separate vectors
+    std::vector<std::vector<double>> means(cabinets, std::vector<double>(numSubjects, 0.0));
+    std::vector<int> assignments(documents);
+
+    // Initial round-robin assignment
+    for (int i = 0; i < documents; i++) {
+        assignments[i] = i % cabinets;
     }
 
     bool changed = true;
-
-    while (changed)
-    {
+    while (changed) {
         changed = false;
 
-        // update means for each cabinet and rebuilt its vector
+        // Update Means
+        // Reset means to zero
         for (int c = 0; c < cabinets; c++) {
-            cabs[c].docs_vector.clear();
-            for (int i = 0; i < documents; i++) {
-                if (assignment[i] == c) {
-                    cabs[c].docs_vector.push_back(info[i]);
-                }
-            }
-            updateMean(cabs[c]);
+            std::fill(means[c].begin(), means[c].end(), 0.0);
         }
 
-        // assign documents to closest cabinet
-        for (int i = 0; i < documents; i++)
-        {
-            docs &d = info[i];
+        std::vector<int> counts(cabinets, 0);
+        for (int i = 0; i < documents; i++) {
+            int c = assignments[i];
+            counts[c]++;
+            for (int s = 0; s < numSubjects; s++) {
+                means[c][s] += scores[i][s];
+            }
+        }
 
-            // compute the distances to all cabinets
-            for (int c = 0; c < cabinets; c++)
-                computeDistance(cabs[c], d);
+        for (int c = 0; c < cabinets; c++) {
+            if (counts[c] > 0) {
+                for (int s = 0; s < numSubjects; s++) {
+                    means[c][s] /= counts[c];
+                }
+            }
+        }
 
+        // Reassign Documents
+        for (int i = 0; i < documents; i++) {
+            int best_cabinet = 0;
+            double min_dist = INFINITY;
 
-            int best = 0;
-            double best_dist = d.distances[0];
+            for (int c = 0; c < cabinets; c++) {
+                double dist = 0.0;
+                for (int s = 0; s < numSubjects; s++) {
+                    double diff = scores[i][s] - means[c][s];
+                    dist += diff * diff;
+                }
 
-            // searches for the lowest distance of a document to a cabinet
-            for (int c = 1; c < cabinets; c++) {
-                if (d.distances[c] < best_dist) {
-                    best_dist = d.distances[c];
-                    best = c;
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    best_cabinet = c;
                 }
             }
 
-            // if found a new distance, change it in assignment
-            if (best != assignment[i]) {
-                assignment[i] = best;
+            if (assignments[i] != best_cabinet) {
+                assignments[i] = best_cabinet;
                 changed = true;
             }
         }
@@ -165,9 +106,10 @@ int main(int argc, char const *argv[])
     exec_time += omp_get_wtime();
     fprintf(stderr, "%.1fs\n", exec_time);
 
-    // output ordered by document id
-    for (int i = 0; i < documents; i++)
-        std::cout << assignment[info[i].id] << "\n";
+    // --- OUTPUT ---
+    for (int i = 0; i < documents; i++) {
+        std::cout << assignments[i] << "\n";
+    }
 
     return 0;
 }
