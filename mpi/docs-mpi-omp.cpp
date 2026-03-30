@@ -26,7 +26,9 @@ double computeDistance(int local_doc_idx, int cab_idx, const std::vector<double>
 }
 
 int main(int argc, char* argv[]) {
-    MPI_Init(&argc, &argv);
+    int required = MPI_THREAD_FUNNELED;
+    int provided;
+    MPI_Init_thread(&argc, &argv, required, &provided);
 
     double exec_time;
     int rank, size;
@@ -99,7 +101,7 @@ int main(int argc, char* argv[]) {
     #pragma omp parallel
     {
         // initial round-robin assignment
-        #pragma omp for simd schedule(static)
+        #pragma omp for schedule(static)
         for (int i = 0; i < local_n; i++) {
             int global_i = range_docs[rank] + i;
             local_assignment[i] = global_i % cabinets;
@@ -164,7 +166,6 @@ int main(int argc, char* argv[]) {
                 // stop if NO ONE changed an assignment
                 MPI_Allreduce(&local_changed, &changed, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
             }
-            #pragma omp barrier
         }
     }
     
