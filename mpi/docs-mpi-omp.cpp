@@ -5,6 +5,10 @@
 #include <fstream>
 #include <cmath>
 
+#define SEED 1234
+#define RAND_RANGE 10.0
+#define UNIF01 ((double) rand() / RAND_MAX)
+
 // ----------------------------------------------------------------------
 //
 //  Collaborators: Eduardo Barata, Fábio Prata, Carlos Alexandre
@@ -41,12 +45,23 @@ int main(int argc, char* argv[]) {
         if (!file.is_open()) { MPI_Abort(MPI_COMM_WORLD, 1); }
         file >> cabinets >> documents >> numSubjects;
         all_scores_flat.resize(documents * numSubjects);
+        
+        // to read contents from a file
         int dummy_id;
         for (int i = 0; i < documents; i++) {
             file >> dummy_id;
             for (int s = 0; s < numSubjects; s++) 
                 file >> all_scores_flat[i * numSubjects + s];
         }
+        
+        
+        // new implementation as prof stated
+        /*for (int i = 0; i < documents; i++) {
+            for (int s = 0; s < numSubjects; s++) {
+                all_scores_flat[i * numSubjects + s] = UNIF01 * RAND_RANGE;
+            }
+        }*/
+        
         file.close();
     }
     if (rank == 0)
@@ -96,7 +111,13 @@ int main(int argc, char* argv[]) {
 
 
     std::vector<int> local_assignment(local_n);
-    
+    bool changed = true;
+    bool local_changed = false;
+    std::vector<double> local_sums(cabinets * numSubjects, 0.0);
+    std::vector<int> local_counts(cabinets, 0);
+    std::vector<double> global_sums(cabinets * numSubjects);
+    std::vector<int> global_counts(cabinets);    
+
     // start parallel region
     #pragma omp parallel
     {
@@ -107,24 +128,21 @@ int main(int argc, char* argv[]) {
             local_assignment[i] = global_i % cabinets;
         }
 
-
-        bool changed = true;
         while (changed) {
-            std::vector<double> local_sums(cabinets * numSubjects, 0.0);
-            std::vector<int> local_counts(cabinets, 0);
+            
 
             // sum up scores for assigned cabinets
             #pragma omp for schedule(static)
             for (int i = 0; i < local_n; i++) {
                 int c = local_assignment[i];
+                #pragma omp atomic update
                 local_counts[c]++;
                 for (int s = 0; s < numSubjects; s++)
+                    #pragma omp atomic update
                     local_sums[c * numSubjects + s] += local_scores[i * numSubjects + s];
             }
-
-            // sync sums
-            std::vector<double> global_sums(cabinets * numSubjects);
-            std::vector<int> global_counts(cabinets);
+            
+            
             #pragma omp master
             {
                 MPI_Allreduce(local_sums.data(), global_sums.data(), cabinets * numSubjects, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -142,8 +160,8 @@ int main(int argc, char* argv[]) {
             }
 
             // find the new closest cabinet
-            bool local_changed = false;
-            #pragma omp for schedule(static)
+            local_changed = false;
+            #pragma omp for schedule(static) reduction(||:local_changed)
             for (int i = 0; i < local_n; i++) {
                 int best_c = 0;
                 double min_dist = 1e30;
@@ -156,16 +174,26 @@ int main(int argc, char* argv[]) {
                 }
                 if (local_assignment[i] != best_c) {
                     local_assignment[i] = best_c;
-                    #pragma omp atomic write
                     local_changed = true;
                 }
-            }
-
-            #pragma omp master
+            }   
+            #pragma omp master 
             {
                 // stop if NO ONE changed an assignment
                 MPI_Allreduce(&local_changed, &changed, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
             }
+
+            // reset the values
+            #pragma omp for schedule(static)
+            for (int i = 0; i < local_n; i++) {
+                int c = local_assignment[i];
+                local_counts[c] = 0;
+                for (int s = 0; s < numSubjects; s++)
+                    local_sums[c * numSubjects + s] = 0.0;
+            }
+
+            #pragma omp barrier
+
         }
     }
     
