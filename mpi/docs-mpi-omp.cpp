@@ -47,20 +47,21 @@ int main(int argc, char* argv[]) {
         all_scores_flat.resize(documents * numSubjects);
         
         // to read contents from a file
-        int dummy_id;
+        /*
+        int temp;
         for (int i = 0; i < documents; i++) {
-            file >> dummy_id;
+            file >> temp;
             for (int s = 0; s < numSubjects; s++) 
                 file >> all_scores_flat[i * numSubjects + s];
         }
-        
+        */
         
         // new implementation as prof stated
-        /*for (int i = 0; i < documents; i++) {
+        for (int i = 0; i < documents; i++) {
             for (int s = 0; s < numSubjects; s++) {
                 all_scores_flat[i * numSubjects + s] = UNIF01 * RAND_RANGE;
             }
-        }*/
+        }
         
         file.close();
     }
@@ -130,7 +131,6 @@ int main(int argc, char* argv[]) {
 
         while (changed) {
             
-
             // sum up scores for assigned cabinets
             #pragma omp for schedule(static)
             for (int i = 0; i < local_n; i++) {
@@ -142,7 +142,7 @@ int main(int argc, char* argv[]) {
                     local_sums[c * numSubjects + s] += local_scores[i * numSubjects + s];
             }
             
-            
+            // get all sums and counts from every processor
             #pragma omp master
             {
                 MPI_Allreduce(local_sums.data(), global_sums.data(), cabinets * numSubjects, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -177,13 +177,14 @@ int main(int argc, char* argv[]) {
                     local_changed = true;
                 }
             }   
+
             #pragma omp master 
             {
                 // stop if NO ONE changed an assignment
                 MPI_Allreduce(&local_changed, &changed, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
             }
 
-            // reset the values
+            // reset the values of locals
             #pragma omp for schedule(static)
             for (int i = 0; i < local_n; i++) {
                 int c = local_assignment[i];
@@ -213,6 +214,7 @@ int main(int argc, char* argv[]) {
         MPI_COMM_WORLD
     );
 
+    // main processor prints results
     if (rank == 0) {
         exec_time += omp_get_wtime();
         fprintf(stderr, "%.1fs\n", exec_time);
