@@ -4,6 +4,12 @@
 #include <cmath>
 #include <omp.h>
 
+// ----------------------------------------------------------------------
+//
+//  Collaborators: Eduardo Barata, Fábio Prata, Carlos Alexandre
+//
+// ----------------------------------------------------------------------
+
 int main(int argc, char const *argv[]) {
     if (argc < 2) return 1;
 
